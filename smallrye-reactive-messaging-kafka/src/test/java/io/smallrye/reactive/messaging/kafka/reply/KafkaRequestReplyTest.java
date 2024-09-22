@@ -5,11 +5,14 @@ import static io.smallrye.reactive.messaging.kafka.reply.KafkaRequestReply.DEFAU
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import io.smallrye.mutiny.Multi;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -137,6 +140,58 @@ public class KafkaRequestReplyTest extends KafkaCompanionTestBase {
         assertThat(companion.consumeStrings().fromTopics(replyTopic, 10).awaitCompletion())
                 .extracting(ConsumerRecord::value)
                 .containsExactlyInAnyOrder("0", "1", "2", "3", "4", "5", "6", "7", "8", "9");
+    }
+
+    @Test
+    void testReplyMessageMulti() {
+        addBeans(ReplyServerMultipleReplies.class);
+        topic = companion.topics().createAndWait(topic, 3);
+        String replyTopic = topic + "-replies";
+        companion.topics().createAndWait(replyTopic, 3);
+
+        List<String> replies = new CopyOnWriteArrayList<>();
+
+        RequestReplyProducer app = runApplication(config(), RequestReplyProducer.class);
+        List<String> expected = new ArrayList<>();
+        int sent = 5;
+        for (int i = 0; i < sent; i++) {
+            app.requestReply().requestMulti(i)
+                    .subscribe()
+                    .with(replies::add);
+            for (int j = 0; j < ReplyServerMultipleReplies.REPLIES; j++) {
+                expected.add(i + ": " + j);
+            }
+        }
+        await().untilAsserted(() -> assertThat(replies).hasSize(ReplyServerMultipleReplies.REPLIES * sent));
+        assertThat(replies)
+                .containsAll(expected);
+
+        assertThat(companion.consumeStrings().fromTopics(replyTopic, ReplyServerMultipleReplies.REPLIES * sent).awaitCompletion())
+                .extracting(ConsumerRecord::value)
+                .containsAll(expected);
+    }
+
+    @Test
+    void testReplyMessageMultiLimit() {
+        addBeans(ReplyServerMultipleReplies.class);
+        topic = companion.topics().createAndWait(topic, 3);
+        String replyTopic = topic + "-replies";
+        companion.topics().createAndWait(replyTopic, 3);
+
+        List<String> replies = new CopyOnWriteArrayList<>();
+
+        RequestReplyProducer app = runApplication(config(), RequestReplyProducer.class);
+        app.requestReply().requestMulti(0)
+                .capDemandsTo(5)
+                .subscribe()
+                .with(replies::add);
+        await().untilAsserted(() -> assertThat(replies).hasSize(5));
+        assertThat(replies)
+                .containsExactlyInAnyOrder("0: 0", "0: 1", "0: 2", "0: 3", "0: 4");
+
+        assertThat(companion.consumeStrings().fromTopics(replyTopic, 5).awaitCompletion())
+                .extracting(ConsumerRecord::value)
+                .containsExactlyInAnyOrder("0: 0", "0: 1", "0: 2", "0: 3", "0: 4");
     }
 
     @Test
@@ -607,6 +662,26 @@ public class KafkaRequestReplyTest extends KafkaCompanionTestBase {
                 return null;
             }
             return String.valueOf(payload);
+        }
+    }
+
+    @ApplicationScoped
+    public static class ReplyServerMultipleReplies {
+
+        public static final int REPLIES = 10;
+
+        @Incoming("req")
+        @Outgoing("rep")
+        Multi<String> process(Integer payload) {
+            if (payload == null) {
+                return null;
+            }
+            return Multi.createFrom().emitter(multiEmitter -> {
+                for (int i = 0; i < REPLIES; i++) {
+                    multiEmitter.emit(payload + ": " + i);
+                }
+                multiEmitter.complete();
+            });
         }
     }
 
