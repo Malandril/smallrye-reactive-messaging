@@ -5,11 +5,11 @@ import java.util.Collection;
 import java.util.Map;
 import java.util.Set;
 
-import io.smallrye.mutiny.Multi;
 import org.apache.kafka.common.TopicPartition;
 import org.eclipse.microprofile.reactive.messaging.Message;
 
 import io.smallrye.common.annotation.Experimental;
+import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.reactive.messaging.EmitterType;
 import io.smallrye.reactive.messaging.kafka.KafkaConsumer;

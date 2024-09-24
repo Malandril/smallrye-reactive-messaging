@@ -5,14 +5,12 @@ import static io.smallrye.reactive.messaging.kafka.reply.KafkaRequestReply.DEFAU
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-import io.smallrye.mutiny.Multi;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -35,6 +33,7 @@ import org.eclipse.microprofile.reactive.messaging.Outgoing;
 import org.junit.jupiter.api.Test;
 
 import io.smallrye.common.annotation.Identifier;
+import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.TimeoutException;
 import io.smallrye.mutiny.helpers.test.UniAssertSubscriber;
 import io.smallrye.reactive.messaging.annotations.Blocking;
@@ -91,6 +90,7 @@ public class KafkaRequestReplyTest extends KafkaCompanionTestBase {
 
         assertThat(companion.consumeStrings().fromTopics(replyTopic, 10).awaitCompletion())
                 .extracting(ConsumerRecord::value).containsExactly("0", "1", "2", "3", "4", "5", "6", "7", "8", "9");
+        assertThat(app.requestReply().getPendingReplies()).isEmpty();
     }
 
     @Test
@@ -114,6 +114,7 @@ public class KafkaRequestReplyTest extends KafkaCompanionTestBase {
         assertThat(companion.consumeStrings().fromTopics(replyTopic, 10).awaitCompletion())
                 .extracting(ConsumerRecord::value)
                 .containsExactly("0", "1", "2", "3", "4", "5", "6", "7", "8", "9");
+        assertThat(app.requestReply().getPendingReplies()).isEmpty();
     }
 
     @Test
@@ -140,6 +141,7 @@ public class KafkaRequestReplyTest extends KafkaCompanionTestBase {
         assertThat(companion.consumeStrings().fromTopics(replyTopic, 10).awaitCompletion())
                 .extracting(ConsumerRecord::value)
                 .containsExactlyInAnyOrder("0", "1", "2", "3", "4", "5", "6", "7", "8", "9");
+        assertThat(app.requestReply().getPendingReplies()).isEmpty();
     }
 
     @Test
@@ -169,6 +171,16 @@ public class KafkaRequestReplyTest extends KafkaCompanionTestBase {
         assertThat(companion.consumeStrings().fromTopics(replyTopic, ReplyServerMultipleReplies.REPLIES * sent).awaitCompletion())
                 .extracting(ConsumerRecord::value)
                 .containsAll(expected);
+
+        Map<CorrelationId, PendingReply> pendingReplies = app.requestReply().getPendingReplies();
+        assertThat(pendingReplies).allSatisfy((k, v) -> assertThat(v.isCancelled()).isFalse());
+        for (PendingReply pending : pendingReplies.values()) {
+            pending.complete();
+        }
+        assertThat(pendingReplies).allSatisfy((k, v) -> assertThat(v.isCancelled()).isTrue());
+        assertThat(app.requestReply().getPendingReplies())
+                .allSatisfy((k, v) -> assertThat(v.isCancelled()).isTrue());
+        await().untilAsserted(() -> assertThat(app.requestReply().getPendingReplies()).isEmpty());
     }
 
     @Test
@@ -182,7 +194,7 @@ public class KafkaRequestReplyTest extends KafkaCompanionTestBase {
 
         RequestReplyProducer app = runApplication(config(), RequestReplyProducer.class);
         app.requestReply().requestMulti(0)
-                .capDemandsTo(5)
+                .select().first(5)
                 .subscribe()
                 .with(replies::add);
         await().untilAsserted(() -> assertThat(replies).hasSize(5));
@@ -192,6 +204,7 @@ public class KafkaRequestReplyTest extends KafkaCompanionTestBase {
         assertThat(companion.consumeStrings().fromTopics(replyTopic, 5).awaitCompletion())
                 .extracting(ConsumerRecord::value)
                 .containsExactlyInAnyOrder("0: 0", "0: 1", "0: 2", "0: 3", "0: 4");
+        assertThat(app.requestReply().getPendingReplies()).isEmpty();
     }
 
     @Test
@@ -241,6 +254,7 @@ public class KafkaRequestReplyTest extends KafkaCompanionTestBase {
         await().untilAsserted(() -> assertThat(replies).hasSize(10));
         assertThat(replies).extracting(ConsumerRecord::value)
                 .containsExactlyInAnyOrder("0", "1", "2", "3", "4", "5", "6", "7", "8", "9");
+        assertThat(app.requestReply().getPendingReplies()).isEmpty();
     }
 
     @Test
@@ -268,6 +282,7 @@ public class KafkaRequestReplyTest extends KafkaCompanionTestBase {
         assertThat(companion.consumeStrings().fromTopics(replyTopic, 10).awaitCompletion())
                 .allSatisfy(record -> assertThat(record.partition()).isEqualTo(2))
                 .extracting(ConsumerRecord::value).containsExactlyInAnyOrder("0", "1", "2", "3", "4", "5", "6", "7", "8", "9");
+        assertThat(app.requestReply().getPendingReplies()).isEmpty();
     }
 
     @Test
@@ -300,6 +315,7 @@ public class KafkaRequestReplyTest extends KafkaCompanionTestBase {
         assertThat(companion.consumerGroups().list()).extracting(ConsumerGroupListing::groupId)
                 .contains(replyTopicConsumer);
         await().untilAsserted(() -> assertThat(companion.consumerGroups().offsets(replyTopicConsumer)).isNotEmpty());
+        assertThat(app.requestReply().getPendingReplies()).isEmpty();
     }
 
     @Test
@@ -332,6 +348,7 @@ public class KafkaRequestReplyTest extends KafkaCompanionTestBase {
         assertThat(companion.consumeStrings().fromTopics(replyTopic, 10).awaitCompletion())
                 .allSatisfy(record -> assertThat(record.partition()).isEqualTo(2))
                 .extracting(ConsumerRecord::value).containsExactlyInAnyOrder("0", "1", "2", "3", "4", "5", "6", "7", "8", "9");
+        assertThat(app.requestReply().getPendingReplies()).isEmpty();
     }
 
     @Test
@@ -362,6 +379,7 @@ public class KafkaRequestReplyTest extends KafkaCompanionTestBase {
         assertThat(companion.consumeStrings().fromTopics(replyTopic, 10).awaitCompletion())
                 .allSatisfy(record -> assertThat(record.partition()).isEqualTo(2))
                 .extracting(ConsumerRecord::value).containsExactlyInAnyOrder("0", "1", "2", "3", "4", "5", "6", "7", "8", "9");
+        assertThat(app.requestReply().getPendingReplies()).isEmpty();
     }
 
     @Test
@@ -476,6 +494,7 @@ public class KafkaRequestReplyTest extends KafkaCompanionTestBase {
 
         assertThat(companion.consumeStrings().fromTopics(replyTopic, 10).awaitCompletion())
                 .extracting(ConsumerRecord::value).containsExactlyInAnyOrder("0", "1", "2", "3", "4", "5", "6", "7", "8", "9");
+        assertThat(app.requestReply().getPendingReplies()).isEmpty();
     }
 
     @Test
@@ -508,6 +527,7 @@ public class KafkaRequestReplyTest extends KafkaCompanionTestBase {
                 .extracting(Throwable::getMessage)
                 .allSatisfy(message -> assertThat(message).containsAnyOf("0", "3", "6", "9")
                         .contains("Cannot reply to"));
+        assertThat(app.requestReply().getPendingReplies()).isEmpty();
     }
 
     @Test
@@ -532,6 +552,7 @@ public class KafkaRequestReplyTest extends KafkaCompanionTestBase {
 
         assertThat(companion.consumeStrings().fromTopics(replyTopic, 10).awaitCompletion())
                 .extracting(ConsumerRecord::value).containsExactlyInAnyOrder("0", "1", "2", "3", "4", "5", "6", "7", "8", "9");
+        assertThat(app.requestReply().getPendingReplies()).isEmpty();
     }
 
     @Test
@@ -567,6 +588,7 @@ public class KafkaRequestReplyTest extends KafkaCompanionTestBase {
 
         assertThat(companion.consumeStrings().fromOffsets(Map.of(tp(replyTopic, 2), 10L), 10).awaitCompletion())
                 .extracting(ConsumerRecord::value).containsExactlyInAnyOrder("0", "1", "2", "3", "4", "5", "6", "7", "8", "9");
+        assertThat(app.requestReply().getPendingReplies()).isEmpty();
     }
 
     @Test

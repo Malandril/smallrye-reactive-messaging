@@ -33,7 +33,6 @@ import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.helpers.Subscriptions;
 import io.smallrye.mutiny.subscription.MultiEmitter;
 import io.smallrye.mutiny.subscription.MultiSubscriber;
-import io.smallrye.mutiny.subscription.UniEmitter;
 import io.smallrye.reactive.messaging.ClientCustomizer;
 import io.smallrye.reactive.messaging.EmitterConfiguration;
 import io.smallrye.reactive.messaging.OutgoingMessageMetadata;
@@ -173,6 +172,12 @@ public class KafkaRequestReplyImpl<Req, Rep> extends MutinyEmitterImpl<Req>
                         pendingReplies.size(), pendingReplies.keySet());
             }
         }
+        for (CorrelationId correlationId : pendingReplies.keySet()) {
+            PendingReplyImpl<Rep> reply = pendingReplies.remove(correlationId);
+            if (reply != null) {
+                reply.complete();
+            }
+        }
         replySource.closeQuietly();
     }
 
@@ -216,15 +221,15 @@ public class KafkaRequestReplyImpl<Req, Rep> extends MutinyEmitterImpl<Req>
         return sendMessage(request.addMetadata(builder.build()).addMetadata(outMetadata))
                 .invoke(() -> subscription.get().request(1))
                 .onItem()
-                .transformToMulti(unused -> Multi.createFrom().<Message<Rep>>emitter(emitter -> {
-                                    pendingReplies.put(correlationId,
-                                            new PendingReplyImpl<>(outMetadata.getResult(),
-                                                    replyTopic,
-                                                    replyPartition,
-                                                    (MultiEmitter<Message<Rep>>) emitter));
-                                })
-                                .ifNoItem().after(replyTimeout).fail()
-                ).onTermination().invoke(() -> pendingReplies.remove(correlationId))
+                .transformToMulti(unused -> Multi.createFrom().<Message<Rep>> emitter(emitter -> {
+                    pendingReplies.put(correlationId,
+                            new PendingReplyImpl<>(outMetadata.getResult(),
+                                    replyTopic,
+                                    replyPartition,
+                                    (MultiEmitter<Message<Rep>>) emitter));
+                })
+                        .ifNoItem().after(replyTimeout).fail())
+                .onTermination().invoke(() -> pendingReplies.remove(correlationId))
                 .onItem().transformToUniAndMerge(m -> {
                     if (replyFailureHandler != null) {
                         Throwable failure = replyFailureHandler.handleReply((KafkaRecord<?, ?>) m);
@@ -283,10 +288,12 @@ public class KafkaRequestReplyImpl<Req, Rep> extends MutinyEmitterImpl<Req>
         // If reply topic header is NOT null, it is considered a request not a reply
         if (header != null && record.getHeaders().lastHeader(replyTopicHeader) == null) {
             CorrelationId correlationId = correlationIdHandler.parse(header.value());
-            pendingReplies.computeIfPresent(correlationId, (id, reply) -> {
+            PendingReplyImpl<Rep> reply = pendingReplies.get(correlationId);
+            if (reply != null) {
                 reply.getEmitter().emit(record);
-                return reply;
-            });
+            } else {
+                log.requestReplyRecordIgnored(channel, record.getTopic(), correlationId.toString());
+            }
         }
         // request more
         subscription.get().request(1);
@@ -330,6 +337,16 @@ public class KafkaRequestReplyImpl<Req, Rep> extends MutinyEmitterImpl<Req>
         @Override
         public RecordMetadata recordMetadata() {
             return metadata;
+        }
+
+        @Override
+        public void complete() {
+            emitter.complete();
+        }
+
+        @Override
+        public boolean isCancelled() {
+            return emitter.isCancelled();
         }
 
         public MultiEmitter<Message<Rep>> getEmitter() {
